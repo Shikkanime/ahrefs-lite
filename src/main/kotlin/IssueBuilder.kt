@@ -18,7 +18,8 @@ class IssueBuilder(
         H1_TOO_LONG,
         OPEN_GRAPH_TAGS_INCOMPLETE,
         INCOMING_LINKS_TOO_FEW,
-        DATA_INCONSISTENCY
+        DATA_INCONSISTENCY,
+        DATA_INCONSISTENCY_SUMMARY,
     }
 
     fun build(): Set<IssueType> = mutableSetOf<IssueType>().apply {
@@ -59,21 +60,27 @@ class IssueBuilder(
         }
     }
 
+    data class Episode(
+        val season: Int,
+        val type: String,
+        val number: Int,
+        val description: String?
+    )
+
     private fun dataInconsistencyIssues(issues: MutableSet<IssueType>) {
         if (page.url.contains("/animes")) {
-            val list: MutableList<Pair<Int, Int>> = mutableListOf()
+            val list: MutableList<Episode> = mutableListOf()
 
             dom.select("p.text-muted.mb-0").forEach { episodeDetails ->
                 val text = episodeDetails.text()
                 val regexSeason = Regex("Saison (\\d+)")
-                val regexNumber = Regex("(Épisode|Spécial|Film) (\\d+)")
+                val regexNumber = Regex("(Épisode|Épisode récapitulatif|Spécial|Film) (\\d+)")
                 if (!regexSeason.containsMatchIn(text) || !regexNumber.containsMatchIn(text)) return@forEach
                 val season = regexSeason.find(text)!!.groupValues[1].toInt()
                 val type = regexNumber.find(text)!!.groupValues[1]
                 val number = regexNumber.find(text)!!.groupValues[2].toInt()
-
-                if (type != "Épisode") return@forEach
-                list.add(season to number)
+                val description = episodeDetails.closest("article")?.selectFirst("div.text-truncate-4.mt-3")?.text()
+                list.add(Episode(season, type, number, description))
             }
 
             // If the list is empty
@@ -82,9 +89,14 @@ class IssueBuilder(
                 return
             }
 
-            // Check if the list is not sorted
-            if (list != list.sortedWith(compareBy({ it.first }, { it.second }))) {
+            val episodes = list.filter { it.type == "Épisode" }
+            // Check if the episodes is not sorted
+            if (episodes != episodes.sortedWith(compareBy({ it.season }, { it.number }))) {
                 issues.add(IssueType.DATA_INCONSISTENCY)
+            }
+
+            if (list.any { it.description?.contains("récap", ignoreCase = true) == true && it.type != "Épisode récapitulatif" }) {
+                issues.add(IssueType.DATA_INCONSISTENCY_SUMMARY)
             }
         }
     }
