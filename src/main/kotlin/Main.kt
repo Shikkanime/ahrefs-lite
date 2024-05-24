@@ -1,13 +1,11 @@
 package fr.shikkanime
 
-import com.google.gson.GsonBuilder
-import com.google.gson.reflect.TypeToken
 import fr.shikkanime.utils.HttpRequest
 import io.ktor.client.statement.*
 import kotlinx.coroutines.delay
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import java.io.File
+import java.io.*
 import kotlin.system.exitProcess
 
 data class Page(
@@ -21,11 +19,9 @@ data class Page(
     val responseTime: Long = 0,
     val incomingInternalLinks: MutableSet<String> = mutableSetOf(),
     val issues: MutableSet<IssueBuilder.IssueType> = mutableSetOf()
-)
+) : Serializable
 
 suspend fun main() {
-//    sendMail()
-
     val baseUrl = "https://www.shikkanime.fr"
     val httpRequest = HttpRequest()
     val scrapedPages = mutableSetOf<Page>()
@@ -43,7 +39,7 @@ suspend fun main() {
         waitingUrls.removeAll(scrapedPages.map { it.url.removeSuffix("/") }.toSet())
 
         // Wait 500ms between each request
-        delay(500)
+        delay(250)
         drawProgressbar(
             scrapedPages.size.toString(),
             waitingUrls.size + scrapedPages.size,
@@ -66,32 +62,26 @@ suspend fun main() {
         page.issues.addAll(IssueBuilder(page.dom!!, page).build())
     }
 
-//    scrapedPages.forEach { page ->
-//        println("Page: ${page.url}")
-//        println("Title: ${page.title}")
-//        println("Description: ${page.description}")
-//        println("Content: ${page.content}")
-//        println("Response time: ${page.responseTime}ms")
-//        println("Incoming links: ${page.incomingInternalLinks.size}")
-//        println("Issues: ${page.issues.joinToString(", ")}")
-//        println()
-//    }
-//
-//    println("Scraping done in ${(endTime - startedTime) / 1000}s")
-//    println("Total pages: ${scrapedPages.size}")
-//    println("Average response time: ${scrapedPages.sumOf { it.responseTime } / scrapedPages.size}ms")
-
-    val file = File("crawl.json")
-    val gson = GsonBuilder().setPrettyPrinting().create()
+    val file = File("crawl.history")
 
     val history = if (file.exists()) {
-        gson.fromJson(file.readText(), object : TypeToken<MutableList<MutableSet<Page>>>() {})
+        ByteArrayInputStream(file.readBytes()).use { bais ->
+            ObjectInputStream(bais).use {
+                it.readObject() as MutableList<MutableSet<Page>> // NOSONAR
+            }
+        }
     } else {
         mutableListOf()
     }
 
     history.add(scrapedPages)
-    gson.toJson(history).let { file.writeText(it) }
+
+    ByteArrayOutputStream().use { baos ->
+        ObjectOutputStream(baos).use { oos ->
+            oos.writeObject(history)
+            file.writeBytes(baos.toByteArray())
+        }
+    }
 
     if (history.size == 1) {
         scrapedPages.forEach { page ->
@@ -199,77 +189,3 @@ fun drawProgressbar(currentIndex: String, length: Int, progress: Double, drawLen
     }%"
     print("\b".repeat(str.length) + str)
 }
-
-//fun generateRandomString(length: Int): String {
-//    val source = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-//    return (1..length)
-//        .map { source.random() }
-//        .joinToString("")
-//}
-//
-//fun sendMail() {
-//    val mailHost = requireNotNull(System.getenv("MAIL_HOST")) { "MAIL_HOST is not set" }
-//    val mailUsername = requireNotNull(System.getenv("MAIL_USERNAME")) { "MAIL_USERNAME is not set" }
-//    val mailPassword = requireNotNull(System.getenv("MAIL_PASSWORD")) { "MAIL_PASSWORD is not set" }
-//
-//    val properties = Properties()
-//    properties["mail.smtp.auth"] = "true"
-//    properties["mail.smtp.starttls.enable"] = "true"
-//    properties["mail.smtp.host"] = mailHost
-//    properties["mail.smtp.port"] = "25"
-//    properties["mail.smtp.ssl.trust"] = mailHost
-//
-//    val session = Session.getInstance(properties, object : Authenticator() {
-//        override fun getPasswordAuthentication(): PasswordAuthentication {
-//            return PasswordAuthentication(mailUsername, mailPassword)
-//        }
-//    })
-//
-//    val message = MimeMessage(session)
-//    message.setFrom(InternetAddress(mailUsername, "Shikkanime - Ne pas répondre"))
-//    message.setRecipients(MimeMessage.RecipientType.TO, InternetAddress.parse("ziedelth@gmail.com"))
-//    message.subject = "Code de synchronisation à usage unique"
-//
-//    val mimeBodyPart = MimeBodyPart()
-//    val list = generateRandomString(6).chunked(1)
-//    val body = StringBuilder()
-//
-//    list.forEachIndexed { index, s ->
-//        if (index == list.size - 1) {
-//            body.append("<td style=\"padding: 5px 10px;\">$s</td>")
-//        } else {
-//            body.append("<td style=\"border-right: 1px solid #cccccc; padding: 5px 10px;\">$s</td>")
-//        }
-//    }
-//
-//    mimeBodyPart.setContent(
-//        """
-//        <div style="font-family: Arial, sans-serif; margin: 0; padding: 0; box-sizing: border-box; width: 100%;">
-//            <span style="font-size: 0; max-height: 0; line-height: 0; display: none;">Voici votre code de synchronisation à usage unique. Veuillez le saisir dans l'application pour vous connecter. Ce code est valable pendant 15 minutes.</span>
-//            <table style="width: 100%; border-collapse: collapse; background-color: #f5f5f5;">
-//                <tr>
-//                    <td style="vertical-align: top; text-align: center;">
-//                        <div style="display: inline-block; max-width: 600px; width: 100%; margin: 50px 10px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); padding: 20px; box-sizing: border-box;">
-//                            <a href="#"><img src="https://www.shikkanime.fr/assets/img/dark_banner.png" alt="Illustration" style="width: 100%; max-width: 400px; height: auto; margin-bottom: 20px;"></a>
-//                            <div style="font-size: 24px; font-weight: bold; margin-bottom: 20px;"> Votre code de synchronisation </div>
-//                            <div style="font-size: 48px; font-weight: bold; background-color: #f0f0f0; border-radius: 4px; padding: 20px 30px; margin-bottom: 20px; display: inline-table;">
-//                                <table style="border-collapse: collapse;">
-//                                    <tr>$body</tr>
-//                                </table>
-//                            </div>
-//                            <div style="font-size: 14px; color: #666666; margin-bottom: 30px;"> Ce code est valable pendant 15 minutes. Veuillez saisir ce code dans l'application. </div>
-//                            <p style="font-size: 16px; color: #333333; margin-bottom: 20px;"> Merci d'utiliser notre application ! Nous apprécions votre confiance et espérons que notre service répondra à vos attentes. </p>
-//                            <p style="font-size: 12px; color: #999999; margin: 0;"> Ceci est un email automatique, merci de ne pas répondre. </p>
-//                        </div>
-//                    </td>
-//                </tr>
-//            </table>
-//        </div>
-//    """.trimIndent(), "text/html; charset=utf-8"
-//    )
-//
-//    val multipart = MimeMultipart("related")
-//    multipart.addBodyPart(mimeBodyPart)
-//    message.setContent(multipart)
-//    Transport.send(message)
-//}
