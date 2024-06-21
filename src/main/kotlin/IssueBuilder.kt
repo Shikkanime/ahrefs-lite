@@ -19,6 +19,7 @@ class IssueBuilder(
         OPEN_GRAPH_TAGS_INCOMPLETE,
         INCOMING_LINKS_TOO_FEW,
         DATA_INCONSISTENCY,
+        DATA_INCONSISTENCY_SEASON,
         DATA_INCONSISTENCY_SUMMARY,
     }
 
@@ -64,6 +65,7 @@ class IssueBuilder(
         val season: Int,
         val type: String,
         val number: Int,
+        val title: String?,
         val description: String?
     )
 
@@ -71,16 +73,21 @@ class IssueBuilder(
         if (page.url.contains("/animes")) {
             val list: MutableList<Episode> = mutableListOf()
 
-            dom.select("p.text-muted.mb-0").forEach { episodeDetails ->
+            val regexSeason = Regex("Saison (\\d+)")
+            val seasonText = dom.select("button.btn.btn-dark.dropdown-toggle.mt-3").text()
+            if (!regexSeason.containsMatchIn(seasonText)) return
+            val season = regexSeason.find(seasonText)!!.groupValues[1].toInt()
+
+            dom.select("div.h6.mt-2.mb-0.text-truncate-2.fw-bold").forEach { episodeDetails ->
                 val text = episodeDetails.text()
-                val regexSeason = Regex("Saison (\\d+)")
                 val regexNumber = Regex("(Épisode|Épisode récapitulatif|Spécial|Film) (\\d+)")
-                if (!regexSeason.containsMatchIn(text) || !regexNumber.containsMatchIn(text)) return@forEach
-                val season = regexSeason.find(text)!!.groupValues[1].toInt()
+                if (!regexNumber.containsMatchIn(text)) return@forEach
                 val type = regexNumber.find(text)!!.groupValues[1]
                 val number = regexNumber.find(text)!!.groupValues[2].toInt()
-                val description = episodeDetails.closest("article")?.selectFirst("div.text-truncate-4.mt-3")?.text()
-                list.add(Episode(season, type, number, description))
+                val closestArticle = episodeDetails.closest("article")
+                val title = closestArticle?.selectFirst("div.h6.text-truncate-2.fw-bold")?.text()
+                val description = closestArticle?.selectFirst("div.text-truncate-4.my-2.m-0")?.text()
+                list.add(Episode(season, type, number, title, description))
             }
 
             // If the list is empty
@@ -95,7 +102,14 @@ class IssueBuilder(
                 issues.add(IssueType.DATA_INCONSISTENCY)
             }
 
-            if (list.any { it.description?.contains("récap", ignoreCase = true) == true && it.type != "Épisode récapitulatif" }) {
+            if (season > 5) {
+                issues.add(IssueType.DATA_INCONSISTENCY_SEASON)
+            }
+
+            if (list.any {
+                    (it.title?.contains("récap", ignoreCase = true) == true || it.description?.contains("récap", ignoreCase = true) == true)
+                            && it.type != "Épisode récapitulatif"
+                }) {
                 issues.add(IssueType.DATA_INCONSISTENCY_SUMMARY)
             }
         }

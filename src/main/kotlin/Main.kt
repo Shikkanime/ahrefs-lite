@@ -6,6 +6,8 @@ import kotlinx.coroutines.delay
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.io.*
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 import kotlin.system.exitProcess
 
 data class Page(
@@ -21,7 +23,60 @@ data class Page(
     val issues: MutableSet<IssueBuilder.IssueType> = mutableSetOf()
 ) : Serializable
 
+fun toGzip(source: ByteArray): ByteArray {
+    ByteArrayOutputStream().use { baos ->
+        GZIPOutputStream(baos).use { gzos ->
+            gzos.write(source)
+        }
+
+        return baos.toByteArray()
+    }
+}
+
+fun fromGzip(source: ByteArray): ByteArray {
+    val bais = ByteArrayInputStream(source)
+    val baos = ByteArrayOutputStream()
+
+    GZIPInputStream(bais).use { gzis ->
+        gzis.copyTo(baos)
+    }
+
+    return baos.toByteArray()
+}
+
+private val file = File("crawl.history")
+
 suspend fun main() {
+    println("Enter a command (crawl, inconsistency-history):")
+    val command = readln()
+
+    when (command) {
+        "crawl" -> crawl()
+        "inconsistency-history" -> {
+            val lastCraw = getCrawlHistory().last()
+
+            lastCraw.filter {
+                it.issues.contains(IssueBuilder.IssueType.DATA_INCONSISTENCY) || it.issues.contains(IssueBuilder.IssueType.DATA_INCONSISTENCY_SEASON) || it.issues.contains(
+                    IssueBuilder.IssueType.DATA_INCONSISTENCY_SUMMARY
+                )
+            }
+                .forEach { page ->
+                    println("Page: ${page.url}")
+                    println("Title: ${page.title}")
+                    println("Description: ${page.description}")
+                    println("Content: ${page.content}")
+                    println("Response time: ${page.responseTime}ms")
+                    println("Incoming links: ${page.incomingInternalLinks.size}")
+                    println("Issues: ${page.issues.joinToString(", ")}")
+                    println()
+                }
+        }
+
+        else -> println("Unknown command")
+    }
+}
+
+private suspend fun crawl() {
     val baseUrl = "https://www.shikkanime.fr"
     val httpRequest = HttpRequest()
     val scrapedPages = mutableSetOf<Page>()
@@ -38,7 +93,6 @@ suspend fun main() {
         waitingUrls.addAll(newPage.links.map { "$baseUrl$it".removeSuffix("/") })
         waitingUrls.removeAll(scrapedPages.map { it.url.removeSuffix("/") }.toSet())
 
-        // Wait 500ms between each request
         delay(250)
         drawProgressbar(
             scrapedPages.size.toString(),
@@ -62,24 +116,14 @@ suspend fun main() {
         page.issues.addAll(IssueBuilder(page.dom!!, page).build())
     }
 
-    val file = File("crawl.history")
-
-    val history = if (file.exists()) {
-        ByteArrayInputStream(file.readBytes()).use { bais ->
-            ObjectInputStream(bais).use {
-                it.readObject() as MutableList<MutableSet<Page>> // NOSONAR
-            }
-        }
-    } else {
-        mutableListOf()
-    }
-
+    val history = getCrawlHistory()
     history.add(scrapedPages)
 
     ByteArrayOutputStream().use { baos ->
         ObjectOutputStream(baos).use { oos ->
             oos.writeObject(history)
-            file.writeBytes(baos.toByteArray())
+
+            file.writeBytes(toGzip(baos.toByteArray()))
         }
     }
 
@@ -98,6 +142,8 @@ suspend fun main() {
         println("Scraping done in ${(endTime - startedTime) / 1000}s")
         println("Total pages: ${scrapedPages.size}")
         println("Average response time: ${scrapedPages.sumOf { it.responseTime } / scrapedPages.size}ms")
+        println("Max response time: ${scrapedPages.maxOf { it.responseTime }}ms")
+        println("Min response time: ${scrapedPages.minOf { it.responseTime }}ms")
     } else {
         val previousCrawl = history[history.size - 2]
 
@@ -121,12 +167,26 @@ suspend fun main() {
         val previousResponseTime = previousCrawl.sumOf { it.responseTime } / previousCrawl.size
         val diffResponseTime = newResponseTime - previousResponseTime
 
-        println("New words: $diffWords")
-        println("New pages: $diffPages")
-        println("New issues: $diffIssues")
-        println("New response time: ${diffResponseTime}ms")
+        println("New words: ${toAbs(diffWords)}")
+        println("New pages: ${toAbs(diffPages)}")
+        println("New issues: ${toAbs(diffIssues)}")
+        println("New response time: ${toAbs(diffResponseTime)} ms")
     }
 }
+
+private fun getCrawlHistory(): MutableList<MutableSet<Page>> {
+    return if (file.exists()) {
+        ByteArrayInputStream(fromGzip(file.readBytes())).use { bais ->
+            ObjectInputStream(bais).use {
+                it.readObject() as MutableList<MutableSet<Page>> // NOSONAR
+            }
+        }
+    } else {
+        mutableListOf()
+    }
+}
+
+private fun toAbs(number: Number): String = if (number.toInt() > 0) "+$number" else number.toString()
 
 private suspend fun canCrawl(httpRequest: HttpRequest, baseUrl: String) {
     // Check if a robots.txt file exists
