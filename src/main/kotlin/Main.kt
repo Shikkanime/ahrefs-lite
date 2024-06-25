@@ -15,6 +15,7 @@ data class Page(
     val title: String,
     val description: String,
     val links: Set<String>,
+    var inSitemap: Boolean = false,
     @Transient
     val dom: Document? = null,
     val content: String = "",
@@ -56,20 +57,24 @@ suspend fun main() {
             val lastCraw = getCrawlHistory().last()
 
             lastCraw.filter {
-                it.issues.contains(IssueBuilder.IssueType.DATA_INCONSISTENCY) || it.issues.contains(IssueBuilder.IssueType.DATA_INCONSISTENCY_SEASON) || it.issues.contains(
-                    IssueBuilder.IssueType.DATA_INCONSISTENCY_SUMMARY
-                )
-            }
-                .forEach { page ->
-                    println("Page: ${page.url}")
-                    println("Title: ${page.title}")
-                    println("Description: ${page.description}")
-                    println("Content: ${page.content}")
-                    println("Response time: ${page.responseTime}ms")
-                    println("Incoming links: ${page.incomingInternalLinks.size}")
-                    println("Issues: ${page.issues.joinToString(", ")}")
-                    println()
+                it.issues.any { issue ->
+                    issue in setOf(
+                        IssueBuilder.IssueType.DATA_INCONSISTENCY,
+                        IssueBuilder.IssueType.DATA_INCONSISTENCY_SEASON,
+                        IssueBuilder.IssueType.DATA_INCONSISTENCY_SUMMARY,
+                        IssueBuilder.IssueType.NOT_IN_SITEMAP
+                    )
                 }
+            }.forEach { page ->
+                println("Page: ${page.url}")
+                println("Title: ${page.title}")
+                println("Description: ${page.description}")
+                println("Content: ${page.content}")
+                println("Response time: ${page.responseTime}ms")
+                println("Incoming links: ${page.incomingInternalLinks.size}")
+                println("Issues: ${page.issues.joinToString(", ")}")
+                println()
+            }
         }
 
         else -> println("Unknown command")
@@ -77,7 +82,7 @@ suspend fun main() {
 }
 
 private suspend fun crawl() {
-    val baseUrl = "https://www.shikkanime.fr"
+    val baseUrl = "http://192.168.1.200:37100"
     val httpRequest = HttpRequest()
     val scrapedPages = mutableSetOf<Page>()
     val waitingUrls = mutableSetOf(baseUrl)
@@ -85,9 +90,13 @@ private suspend fun crawl() {
 
     canCrawl(httpRequest, baseUrl)
 
+    val sitemap = httpRequest.get("$baseUrl/sitemap.xml")
+    val urls = Jsoup.parse(sitemap.bodyAsText()).select("loc").map { it.text() }
+
     while (waitingUrls.isNotEmpty()) {
         val url = waitingUrls.first()
         val newPage = scrape(httpRequest, url, baseUrl)
+        newPage.inSitemap = urls.contains(newPage.url)
 
         scrapedPages.add(newPage)
         waitingUrls.addAll(newPage.links.map { "$baseUrl$it".removeSuffix("/") })
@@ -215,6 +224,12 @@ private suspend fun canCrawl(httpRequest: HttpRequest, baseUrl: String) {
 suspend fun scrape(httpRequest: HttpRequest, url: String, baseUrl: String = url): Page {
     val start = System.currentTimeMillis()
     val response = httpRequest.get(url, mapOf("User-Agent" to "ahrefs-lite"))
+
+    if (response.status.value != 200) {
+        println("Error while scraping $url: ${response.status.value}")
+        exitProcess(1)
+    }
+
     val requestedTime = System.currentTimeMillis() - start
     val parse = Jsoup.parse(response.bodyAsText())
 
@@ -234,7 +249,7 @@ suspend fun scrape(httpRequest: HttpRequest, url: String, baseUrl: String = url)
     val title = parse.title()
     val description = parse.select("meta[name=description]").attr("content")
 
-    return Page(url.removeSuffix("/"), title, description, links, parse, parse.select("body").text(), requestedTime)
+    return Page(url.removeSuffix("/"), title, description, links, false, parse, parse.select("body").text(), requestedTime)
 }
 
 fun drawProgressbar(currentIndex: String, length: Int, progress: Double, drawLength: Int = 50) {

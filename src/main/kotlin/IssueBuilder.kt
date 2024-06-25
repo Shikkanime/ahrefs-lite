@@ -21,6 +21,7 @@ class IssueBuilder(
         DATA_INCONSISTENCY,
         DATA_INCONSISTENCY_SEASON,
         DATA_INCONSISTENCY_SUMMARY,
+        NOT_IN_SITEMAP
     }
 
     fun build(): Set<IssueType> = mutableSetOf<IssueType>().apply {
@@ -30,6 +31,7 @@ class IssueBuilder(
         openGraphIssues(this@apply)
         if (page.incomingInternalLinks.size <= 1) add(IssueType.INCOMING_LINKS_TOO_FEW)
         dataInconsistencyIssues(this@apply)
+        if (!page.inSitemap) add(IssueType.NOT_IN_SITEMAP)
     }
 
     private fun titleIssues(issues: MutableSet<IssueType>) {

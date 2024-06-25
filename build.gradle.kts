@@ -1,8 +1,8 @@
-val ktorVersion = "2.3.10"
+val ktorVersion = "2.3.12"
 val jsoupVersion = "1.17.2"
 
 plugins {
-    kotlin("jvm") version "1.9.23"
+    kotlin("jvm") version "2.0.0"
 }
 
 group = "fr.shikkanime"
