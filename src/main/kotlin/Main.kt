@@ -2,12 +2,14 @@ package fr.shikkanime
 
 import fr.shikkanime.utils.HttpRequest
 import io.ktor.client.statement.*
+import io.ktor.http.*
 import kotlinx.coroutines.delay
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.io.*
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
+import kotlin.math.max
 import kotlin.system.exitProcess
 
 data class Page(
@@ -22,6 +24,11 @@ data class Page(
     val responseTime: Long = 0,
     val incomingInternalLinks: MutableSet<String> = mutableSetOf(),
     val issues: MutableSet<IssueBuilder.IssueType> = mutableSetOf()
+) : Serializable
+
+data class Site(
+    val url: String,
+    var history: MutableList<MutableSet<Page>>
 ) : Serializable
 
 fun toGzip(source: ByteArray): ByteArray {
@@ -48,13 +55,19 @@ fun fromGzip(source: ByteArray): ByteArray {
 private val file = File("crawl.history")
 
 suspend fun main() {
+    println("Enter a URL: (Without http:// or https://)")
+    val url = "https://" + readln().removePrefix("http://").removePrefix("https://")
     println("Enter a command (crawl, inconsistency-history):")
     val command = readln()
 
     when (command) {
-        "crawl" -> crawl()
+        "crawl" -> crawl(url)
         "inconsistency-history" -> {
-            val lastCraw = getCrawlHistory().last()
+            val lastCraw = getCrawlHistory().find { it.url == url }?.history?.lastOrNull()
+                ?: run {
+                    println("No crawl history found for $url")
+                    exitProcess(1)
+                }
 
             lastCraw.filter {
                 it.issues.any { issue ->
@@ -62,6 +75,8 @@ suspend fun main() {
                         IssueBuilder.IssueType.DATA_INCONSISTENCY,
                         IssueBuilder.IssueType.DATA_INCONSISTENCY_SEASON,
                         IssueBuilder.IssueType.DATA_INCONSISTENCY_SUMMARY,
+                        IssueBuilder.IssueType.DATA_INCONSISTENCY_EPISODE,
+                        IssueBuilder.IssueType.DATA_INCONSISTENCY_TOO_MANY_EPISODES_ON_SAME_DAY,
                         IssueBuilder.IssueType.NOT_IN_SITEMAP
                     )
                 }
@@ -81,8 +96,7 @@ suspend fun main() {
     }
 }
 
-private suspend fun crawl() {
-    val baseUrl = "http://192.168.1.200:37100"
+private suspend fun crawl(baseUrl: String) {
     val httpRequest = HttpRequest()
     val scrapedPages = mutableSetOf<Page>()
     val waitingUrls = mutableSetOf(baseUrl)
@@ -91,7 +105,8 @@ private suspend fun crawl() {
     canCrawl(httpRequest, baseUrl)
 
     val sitemap = httpRequest.get("$baseUrl/sitemap.xml")
-    val urls = Jsoup.parse(sitemap.bodyAsText()).select("loc").map { it.text() }
+    require(sitemap.status == HttpStatusCode.OK) { "Sitemap not found or not accessible" }
+    val urls = Jsoup.parse(sitemap.bodyAsText()).select("loc").map { it.text().removeSuffix("/") }
 
     while (waitingUrls.isNotEmpty()) {
         val url = waitingUrls.first()
@@ -103,10 +118,12 @@ private suspend fun crawl() {
         waitingUrls.removeAll(scrapedPages.map { it.url.removeSuffix("/") }.toSet())
 
         delay(250)
+        val max = max(urls.size, (waitingUrls.size + scrapedPages.size))
+
         drawProgressbar(
             scrapedPages.size.toString(),
-            waitingUrls.size + scrapedPages.size,
-            scrapedPages.size.toDouble() / (waitingUrls.size + scrapedPages.size)
+            max,
+            scrapedPages.size.toDouble() / max
         )
     }
 
@@ -125,18 +142,22 @@ private suspend fun crawl() {
         page.issues.addAll(IssueBuilder(page.dom!!, page).build())
     }
 
-    val history = getCrawlHistory()
+    val sites = getCrawlHistory()
+    val history = sites.find { it.url == baseUrl }?.history ?: mutableListOf()
     history.add(scrapedPages)
+
+    if (sites.none { it.url == baseUrl }) {
+        sites.add(Site(baseUrl, history))
+    }
 
     ByteArrayOutputStream().use { baos ->
         ObjectOutputStream(baos).use { oos ->
-            oos.writeObject(history)
-
+            oos.writeObject(sites)
             file.writeBytes(toGzip(baos.toByteArray()))
         }
     }
 
-    if (history.size == 1) {
+    if (sites.size == 1) {
         scrapedPages.forEach { page ->
             println("Page: ${page.url}")
             println("Title: ${page.title}")
@@ -154,7 +175,7 @@ private suspend fun crawl() {
         println("Max response time: ${scrapedPages.maxOf { it.responseTime }}ms")
         println("Min response time: ${scrapedPages.minOf { it.responseTime }}ms")
     } else {
-        val previousCrawl = history[history.size - 2]
+        val previousCrawl = history[sites.size - 2]
 
         // Calculate the diff of new words
         val newWords = scrapedPages.sumOf { it.content.split(" ").size }
@@ -183,15 +204,15 @@ private suspend fun crawl() {
     }
 }
 
-private fun getCrawlHistory(): MutableList<MutableSet<Page>> {
+private fun getCrawlHistory(): MutableSet<Site> {
     return if (file.exists()) {
         ByteArrayInputStream(fromGzip(file.readBytes())).use { bais ->
             ObjectInputStream(bais).use {
-                it.readObject() as MutableList<MutableSet<Page>> // NOSONAR
+                it.readObject() as MutableSet<Site> // NOSONAR
             }
         }
     } else {
-        mutableListOf()
+        mutableSetOf()
     }
 }
 
@@ -201,7 +222,7 @@ private suspend fun canCrawl(httpRequest: HttpRequest, baseUrl: String) {
     // Check if a robots.txt file exists
     val robotsTxt = httpRequest.get("$baseUrl/robots.txt", mapOf("User-Agent" to "ahrefs-lite"))
 
-    if (robotsTxt.status.value == 404) {
+    if (robotsTxt.status == HttpStatusCode.NotFound) {
         println("No robots.txt file found")
         exitProcess(1)
     }
@@ -225,7 +246,7 @@ suspend fun scrape(httpRequest: HttpRequest, url: String, baseUrl: String = url)
     val start = System.currentTimeMillis()
     val response = httpRequest.get(url, mapOf("User-Agent" to "ahrefs-lite"))
 
-    if (response.status.value != 200) {
+    if (response.status != HttpStatusCode.OK) {
         println("Error while scraping $url: ${response.status.value}")
         exitProcess(1)
     }

@@ -1,6 +1,8 @@
 package fr.shikkanime
 
 import org.jsoup.nodes.Document
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 class IssueBuilder(
     private val dom: Document,
@@ -21,6 +23,8 @@ class IssueBuilder(
         DATA_INCONSISTENCY,
         DATA_INCONSISTENCY_SEASON,
         DATA_INCONSISTENCY_SUMMARY,
+        DATA_INCONSISTENCY_EPISODE,
+        DATA_INCONSISTENCY_TOO_MANY_EPISODES_ON_SAME_DAY,
         NOT_IN_SITEMAP
     }
 
@@ -64,6 +68,7 @@ class IssueBuilder(
     }
 
     data class Episode(
+        val releaseDate: LocalDate,
         val season: Int,
         val type: String,
         val number: Int,
@@ -87,9 +92,10 @@ class IssueBuilder(
                 val type = regexNumber.find(text)!!.groupValues[1]
                 val number = regexNumber.find(text)!!.groupValues[2].toInt()
                 val closestArticle = episodeDetails.closest("article")
+                val releaseDate = closestArticle?.selectFirst("span.text-muted.mt-0")?.text()
                 val title = closestArticle?.selectFirst("div.h6.text-truncate-2.fw-bold")?.text()
                 val description = closestArticle?.selectFirst("div.text-truncate-4.my-2.m-0")?.text()
-                list.add(Episode(season, type, number, title, description))
+                list.add(Episode(LocalDate.parse(releaseDate!!, DateTimeFormatter.ofPattern("dd/MM/yyyy")), season, type, number, title, description))
             }
 
             // If the list is empty
@@ -104,16 +110,27 @@ class IssueBuilder(
                 issues.add(IssueType.DATA_INCONSISTENCY)
             }
 
+            if (episodes.any { it.number <= 0 }) {
+                issues.add(IssueType.DATA_INCONSISTENCY_EPISODE)
+            }
+
+            val episodesByDate = episodes.groupBy { it.releaseDate }
+
+            if (episodesByDate.any { it.value.size > 2 }) {
+                issues.add(IssueType.DATA_INCONSISTENCY_TOO_MANY_EPISODES_ON_SAME_DAY)
+            }
+
             if (season > 5) {
                 issues.add(IssueType.DATA_INCONSISTENCY_SEASON)
             }
 
-            if (list.any {
-                    (it.title?.contains("récap", ignoreCase = true) == true || it.description?.contains("récap", ignoreCase = true) == true)
-                            && it.type != "Épisode récapitulatif"
-                }) {
+            if (containsNonRecapTypeWithRecapInTitleOrDescription(list)) {
                 issues.add(IssueType.DATA_INCONSISTENCY_SUMMARY)
             }
         }
+    }
+
+    private fun containsNonRecapTypeWithRecapInTitleOrDescription(list: MutableList<Episode>) = list.any {
+        (it.title?.contains("récap", ignoreCase = true) == true || it.description?.contains("récap", ignoreCase = true) == true) && it.type != "Épisode récapitulatif"
     }
 }
