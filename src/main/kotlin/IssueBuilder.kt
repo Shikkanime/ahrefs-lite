@@ -87,7 +87,7 @@ class IssueBuilder(
 
             dom.select("div.h6.mt-2.mb-0.text-truncate-2.fw-bold").forEach { episodeDetails ->
                 val text = episodeDetails.text()
-                val regexNumber = Regex("(Épisode|Épisode récapitulatif|Spécial|Film) (\\d+)")
+                val regexNumber = Regex("(Épisode|Épisode récapitulatif|Spécial|Film) (-?\\d+)")
                 if (!regexNumber.containsMatchIn(text)) return@forEach
                 val type = regexNumber.find(text)!!.groupValues[1]
                 val number = regexNumber.find(text)!!.groupValues[2].toInt()
