@@ -107,6 +107,7 @@ private suspend fun crawl(baseUrl: String) {
     val sitemap = httpRequest.get("$baseUrl/sitemap.xml")
     require(sitemap.status == HttpStatusCode.OK) { "Sitemap not found or not accessible" }
     val urls = Jsoup.parse(sitemap.bodyAsText()).select("loc").map { it.text().removeSuffix("/") }
+    waitingUrls.addAll(urls)
 
     while (waitingUrls.isNotEmpty()) {
         val url = waitingUrls.first()
